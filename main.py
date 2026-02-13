@@ -15,7 +15,6 @@ def main():
     
     start_time = time.time()
     
-    # Step 1: Image Input & OCR
     print(f"Processing image: {args.image}...", file=sys.stderr)
     try:
         raw_text = extract_text(args.image)
@@ -28,7 +27,6 @@ def main():
         print(raw_text, file=sys.stderr)
         print("----------------------", file=sys.stderr)
 
-    # Step 2: Text Cleaning
     cleaned_text = clean_text(raw_text)
     
     if args.verbose:
@@ -36,13 +34,13 @@ def main():
         print(cleaned_text, file=sys.stderr)
         print("--------------------", file=sys.stderr)
 
-    # Step 3: Summarization
+
     if not cleaned_text.strip():
         result = {"summary": "No readable text found on the image."}
     else:
         result = summarize(cleaned_text)
 
-    # Output JSON exactly as requested
+
     print(json.dumps(result, indent=2))
     
     end_time = time.time()

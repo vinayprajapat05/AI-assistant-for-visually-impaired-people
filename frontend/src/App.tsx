@@ -1,82 +1,80 @@
-
-// App.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import SpeechService, { SpeechCommand } from './speechService';
+const API_URL = "https://vfht3x3v-8000.inc1.devtunnels.ms/process-image";
 
-// Backend URL
-const API_URL = "http://localhost:8000/process-image";
-
-type AppState = "INITIAL" | "CAMERA" | "PROCESSING" | "RESULT" | "ERROR";
+type AppState = "WELCOME" | "INITIAL" | "CAMERA" | "PROCESSING" | "RESULT" | "ERROR";
 
 function App() {
-    const [state, setState] = useState<AppState>("INITIAL");
+    const [state, setState] = useState<AppState>("WELCOME");
     const [summary, setSummary] = useState<string>("");
     const [capturedImage, setCapturedImage] = useState<string | null>(null);
     const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
+    const [listening, setListening] = useState<boolean>(false);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const speechRef = useRef<SpeechService | null>(null);
 
-    // Initialize Speech Service
-    useEffect(() => {
-        speechRef.current = new SpeechService(handleVoiceCommand);
-        speechRef.current.startListening();
+    const stateRef = useRef<AppState>(state);
+    const summaryRef = useRef<string>(summary);
+    const videoStreamRef = useRef<MediaStream | null>(videoStream);
 
-        // Initial announcement
-        setTimeout(() => {
-            speechRef.current?.speak("Welcome. Tap the start button or say Open Camera.");
-        }, 1000);
+    useEffect(() => { stateRef.current = state; }, [state]);
+    useEffect(() => { summaryRef.current = summary; }, [summary]);
+    useEffect(() => { videoStreamRef.current = videoStream; }, [videoStream]);
 
-        return () => {
-            speechRef.current?.stopListening();
-            if (videoStream) {
-                videoStream.getTracks().forEach(track => track.stop());
-            }
-        };
+    const startCameraRef = useRef<() => void>(() => { });
+    const captureImageRef = useRef<() => void>(() => { });
+
+    const INACTIVITY_TIMEOUT = 20_000; 
+    const lastInteractionRef = useRef<number>(Date.now());
+    const inactivityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const resetInactivityTimer = useCallback(() => {
+        lastInteractionRef.current = Date.now();
     }, []);
 
-    // Handle Voice Commands
-    const handleVoiceCommand = (command: SpeechCommand) => {
-        console.log("Voice Command received:", command);
-
-        switch (command) {
-            case "OPEN_CAMERA":
-                startCamera();
-                break;
-            case "RETAKE_IMAGE":
-                startCamera();
-                break;
-            case "REPLAY_SUMMARY":
-                if (state === "RESULT" && summary) {
-                    speechRef.current?.speak(summary);
-                } else {
-                    speechRef.current?.speak("No summary to replay.");
-                }
-                break;
-            case "STOP_SPEAKING":
-                speechRef.current?.cancelSpeech();
-                break;
-            default:
-                // Optional: Feedback for unknown command?
-                break;
+    const getScreenGuidance = useCallback((): string | null => {
+        const s = stateRef.current;
+        if (s === "INITIAL") {
+            return (
+                "Say open camera, to start the camera. " +
+                "Or tap the start camera button on screen."
+            );
         }
-    };
+        if (s === "CAMERA") {
+            return (
+                "Camera is open. " +
+                "Say capture, to take a photo. " +
+                "You can also tap the screen to capture."
+            );
+        }
+        if (s === "RESULT" || s === "ERROR") {
+            return (
+                "Say retake, to take a new photo. " +
+                "Say replay, to hear the summary again. " +
+                "Say stop, to stop me from speaking."
+            );
+        }
+        return null;
+    }, []);
 
-    // 1. Start Camera
-    const startCamera = async () => {
+    const startCamera = useCallback(async () => {
         try {
-            if (videoStream) {
-                videoStream.getTracks().forEach(track => track.stop());
+            if (videoStreamRef.current) {
+                videoStreamRef.current.getTracks().forEach(track => track.stop());
             }
 
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: "environment" } // Prefer back camera on mobile
+                video: { facingMode: "environment" }
             });
 
             setVideoStream(stream);
             setState("CAMERA");
-            speechRef.current?.speak("Camera open. Tap anywhere to capture.");
+            speechRef.current?.speak(
+                "Camera is now open. " +
+                "Say capture, to take a photo. " +
+                "You can also tap the screen to capture."
+            );
 
         } catch (err) {
             console.error("Camera error:", err);
@@ -84,20 +82,11 @@ function App() {
             setSummary("Could not access camera. Please allow permissions.");
             speechRef.current?.speak("Could not access camera. Please allow permissions.");
         }
-    };
+    }, []);
 
-    // Attach stream to video element when in CAMERA mode
-    useEffect(() => {
-        if (state === "CAMERA" && videoRef.current && videoStream) {
-            videoRef.current.srcObject = videoStream;
-        }
-    }, [state, videoStream]);
+    const captureImage = useCallback(async () => {
+        if (!videoRef.current || !videoStreamRef.current) return;
 
-    // 2. Capture Image
-    const captureImage = async () => {
-        if (!videoRef.current || !videoStream) return;
-
-        // Feedback
         speechRef.current?.speak("Capturing...");
         setState("PROCESSING");
 
@@ -108,11 +97,10 @@ function App() {
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(video, 0, 0);
 
-        // Stop camera stream to save battery/resources
-        videoStream.getTracks().forEach(track => track.stop());
+        const currentStream = videoStreamRef.current;
+        currentStream.getTracks().forEach(track => track.stop());
         setVideoStream(null);
 
-        // Convert to Blob
         canvas.toBlob(async (blob) => {
             if (blob) {
                 await uploadImage(blob);
@@ -122,9 +110,102 @@ function App() {
                 speechRef.current?.speak("Failed to capture image.");
             }
         }, "image/jpeg", 0.85);
-    };
+    }, []);
 
-    // 3. Upload to Backend
+    useEffect(() => { startCameraRef.current = startCamera; }, [startCamera]);
+    useEffect(() => { captureImageRef.current = captureImage; }, [captureImage]);
+
+    const handleVoiceCommand = useCallback((command: SpeechCommand) => {
+        console.log("Voice Command received:", command, "| Current state:", stateRef.current);
+        resetInactivityTimer(); 
+
+        switch (command) {
+            case "OPEN_CAMERA":
+                startCameraRef.current();
+                break;
+            case "CAPTURE_IMAGE":
+                if (stateRef.current === "CAMERA") {
+                    captureImageRef.current();
+                } else {
+                    speechRef.current?.speak("Camera is not open. Say open camera first.");
+                }
+                break;
+            case "RETAKE_IMAGE":
+                startCameraRef.current();
+                break;
+            case "REPLAY_SUMMARY":
+                if (stateRef.current === "RESULT" && summaryRef.current) {
+                    speechRef.current?.speak(summaryRef.current);
+                } else {
+                    speechRef.current?.speak("No summary to replay.");
+                }
+                break;
+            case "STOP_SPEAKING":
+                speechRef.current?.cancelSpeech();
+                break;
+            default:
+                break;
+        }
+    }, [resetInactivityTimer]);
+
+
+    useEffect(() => {
+        speechRef.current = new SpeechService(handleVoiceCommand);
+
+        return () => {
+            speechRef.current?.stopListening();
+            if (videoStreamRef.current) {
+                videoStreamRef.current.getTracks().forEach(track => track.stop());
+            }
+        };
+    }, [handleVoiceCommand]);
+
+    useEffect(() => {
+        inactivityTimerRef.current = setInterval(() => {
+            const elapsed = Date.now() - lastInteractionRef.current;
+            if (elapsed >= INACTIVITY_TIMEOUT) {
+                if (speechRef.current?.busy) return;
+
+                const guidance = getScreenGuidance();
+                if (guidance) {
+                    console.log("⏱️ Inactivity — auto-repeating guidance for:", stateRef.current);
+                    speechRef.current?.speak(guidance);
+   
+                    lastInteractionRef.current = Date.now();
+                }
+            }
+        }, 1000);
+
+        return () => {
+            if (inactivityTimerRef.current) {
+                clearInterval(inactivityTimerRef.current);
+            }
+        };
+    }, [getScreenGuidance]);
+
+    useEffect(() => {
+        resetInactivityTimer();
+    }, [state, resetInactivityTimer]);
+
+    const handleFirstInteraction = useCallback(() => {
+        if (stateRef.current !== "WELCOME") return;
+        setState("INITIAL");
+        setListening(true);
+        resetInactivityTimer();
+
+        speechRef.current?.speakThenListen(
+            "Welcome to Vision Assistant. " +
+            "Say open camera, to start the camera. " +
+            "Or tap the start camera button on screen."
+        );
+    }, [resetInactivityTimer]);
+
+    useEffect(() => {
+        if (state === "CAMERA" && videoRef.current && videoStream) {
+            videoRef.current.srcObject = videoStream;
+        }
+    }, [state, videoStream]);
+
     const uploadImage = async (imageBlob: Blob) => {
         speechRef.current?.speak("Extracting details. Please wait.");
 
@@ -152,54 +233,94 @@ function App() {
         }
     };
 
-    // 4. Handle Response
     const handleBackendResponse = (data: { range_status: string, summary: string, image_base64?: string }) => {
-        // We always go to RESULT now, range_status "too_far" is effectively deprecated by backend 
-        // but kept for backward compatibility if needed. 
         setState("RESULT");
         setSummary(data.summary);
         if (data.image_base64) {
             setCapturedImage(data.image_base64);
         }
-        speechRef.current?.speak(data.summary);
+        const fullAnnouncement =
+            data.summary + ". " +
+            "Here are your voice commands. " +
+            "Say retake, to take a new photo. " +
+            "Say replay, to hear this summary again. " +
+            "Say stop, to stop me from speaking.";
+        speechRef.current?.speak(fullAnnouncement);
     };
 
-    // Renders
-    return (
-        <div className="app-container" onClick={state === "CAMERA" ? captureImage : undefined}>
+    const handleUploadFile = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = async (e: Event) => {
+            const target = e.target as HTMLInputElement;
+            if (target.files && target.files[0]) {
+                setState("PROCESSING");
+                speechRef.current?.speak("Processing uploaded image.");
+                await uploadImage(target.files[0]);
+            }
+        };
+        input.click();
+    };
 
-            {/* HEADER for all screens */}
+    const handleAppClick = useCallback(() => {
+        resetInactivityTimer();
+        if (state === "CAMERA") {
+            captureImage();
+        }
+    }, [state, captureImage, resetInactivityTimer]);
+
+    return (
+        <div className="app-container" onClick={handleAppClick}>
+
             <header className="app-header">
                 <h1>Vision Assistant</h1>
+                {state !== "WELCOME" && (
+                    <div className={`mic-indicator ${listening ? 'active' : ''}`}>
+                        <span className="mic-icon">🎤</span>
+                        <span className="mic-label">{listening ? 'Listening...' : 'Mic Off'}</span>
+                    </div>
+                )}
             </header>
 
-            {/* INITIAL SCREEN */}
+            {state === "WELCOME" && (
+                <div className="screen welcome-screen" onClick={handleFirstInteraction}>
+                    <div className="welcome-icon">👆</div>
+                    <h2 className="welcome-title">Tap Anywhere to Begin</h2>
+                    <p className="welcome-subtitle">
+                        This activates voice commands and audio guidance
+                    </p>
+                </div>
+            )}
+
             {state === "INITIAL" && (
                 <div className="screen initial-screen">
                     <button className="large-btn" onClick={() => startCamera()}>
                         START CAMERA
                     </button>
+                    <button className="large-btn secondary" onClick={handleUploadFile}>
+                        UPLOAD IMAGE
+                    </button>
                     <div className="instructions">
                         <p>Voice Commands:</p>
                         <ul>
-                            <li>"Open Camera"</li>
-                            <li>"Retake Image"</li>
-                            <li>"Replay Summary"</li>
-                            <li>"Stop Speaking"</li>
+                            <li>"Open Camera" — opens the camera</li>
+                            <li>"Capture" / "Take Photo" — captures image</li>
+                            <li>"Retake" — takes a new photo</li>
+                            <li>"Replay" / "Repeat" — re-reads summary</li>
+                            <li>"Stop" — stops speaking</li>
                         </ul>
                     </div>
                 </div>
             )}
 
-            {/* CAMERA SCREEN */}
             {state === "CAMERA" && (
                 <div className="screen camera-screen">
                     <video ref={videoRef} autoPlay playsInline muted className="camera-feed" />
-                    <div className="overlay-text">Tap anywhere to capture</div>
+                    <div className="overlay-text">Tap anywhere or say "Capture"</div>
                 </div>
             )}
 
-            {/* PROCESSING SCREEN */}
             {state === "PROCESSING" && (
                 <div className="screen processing-screen">
                     <div className="spinner"></div>
@@ -207,11 +328,9 @@ function App() {
                 </div>
             )}
 
-            {/* RESULT / ERROR SCREEN */}
             {(state === "RESULT" || state === "ERROR") && (
                 <div className="screen result-screen">
 
-                    {/* Display captured image if available */}
                     {capturedImage && (
                         <div className="image-preview-container">
                             <img src={capturedImage} alt="Captured Product" className="image-preview" />

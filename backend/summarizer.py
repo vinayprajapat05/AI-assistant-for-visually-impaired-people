@@ -44,15 +44,12 @@ def summarize(clean_text: str) -> dict:
 
         content = response['message']['content']
         
-        # Simple extraction of JSON if model adds fluff around it
-        # Try to find { ... }
         start = content.find('{')
         end = content.rfind('}')
         if start != -1 and end != -1:
             json_str = content[start:end+1]
             return json.loads(json_str)
         else:
-            # Fallback if valid JSON not found
             return {"summary": content.strip()}
 
     except Exception as e:
