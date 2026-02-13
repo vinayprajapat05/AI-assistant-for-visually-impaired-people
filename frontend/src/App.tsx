@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import SpeechService, { SpeechCommand } from './speechService';
 const API_URL = "https://vfht3x3v-8000.inc1.devtunnels.ms/process-image";
-
+//http://localhost:8000
 type AppState = "WELCOME" | "INITIAL" | "CAMERA" | "PROCESSING" | "RESULT" | "ERROR";
 
 function App() {

@@ -66,3 +66,5 @@ async def process_image(file: UploadFile = File(...)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="https://vfht3x3v-8000.inc1.devtunnels.ms/")
+    # uvicorn.run(app, host="0.0.0.0", port=8000)
+
