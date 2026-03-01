@@ -1,12 +1,13 @@
 # 🧿 AI Assistant for Visually Impaired People
 
-An intelligent, local-only assistant that helps visually impaired users understand their surroundings by capturing images, extracting text via **OCR**, and delivering spoken summaries powered by a **local LLM** — all through voice commands and a fully accessible interface.
+An intelligent, local-only assistant that helps visually impaired users understand their surroundings by capturing images, extracting text via a **multi-pass Advanced OCR engine**, and delivering spoken summaries powered by a **local LLM** — all through voice commands and a fully accessible interface.
 
 ---
 
 ## 📑 Table of Contents
 
 - [Tech Stack](#-tech-stack)
+- [Advanced OCR Engine](#-advanced-ocr-engine)
 - [Architecture Overview](#-architecture-overview)
 - [Project Structure](#-project-structure)
 - [Prerequisites](#-prerequisites)
@@ -52,8 +53,9 @@ An intelligent, local-only assistant that helps visually impaired users understa
 | Technology | Version | Purpose |
 |---|---|---|
 | **Tesseract OCR** | latest | Open-source OCR engine that extracts raw text from product label images and other printed/handwritten text. Runs fully offline — no cloud API required. |
-| **pytesseract** | latest | Python wrapper around the Tesseract OCR engine, used to call `image_to_data()` for word-level text extraction with bounding-box coordinates and confidence scores. |
-| **Pillow (PIL)** | latest | Python imaging library used for image preprocessing before OCR — including image opening, RGB conversion, 2× upscaling (bicubic), contrast enhancement (1.5×), sharpness enhancement (2×), and drawing OCR bounding-box highlights. |
+| **pytesseract** | latest | Python wrapper around the Tesseract OCR engine, used in a **multi-pass pipeline** to call `image_to_data()` with multiple PSM modes (3, 4, 6, 11) for word-level text extraction with bounding-box coordinates and confidence scores. |
+| **Pillow (PIL)** | latest | Python imaging library used for **6 different image preprocessing variants** before OCR — including adaptive resizing (LANCZOS), contrast/sharpness enhancement, adaptive binarization, median filtering, image inversion, and drawing **color-coded** OCR bounding-box highlights. |
+| **NumPy** | latest | Used for efficient array-based image manipulation in the OCR preprocessing pipeline — including adaptive local-mean thresholding (binarization) and image inversion for light-on-dark text detection. |
 
 ### AI / Summarization
 
@@ -76,9 +78,71 @@ An intelligent, local-only assistant that helps visually impaired users understa
 | **npm** | Package manager for installing and managing frontend JavaScript/TypeScript dependencies. |
 | **pip** | Package manager for installing Python backend dependencies from `requirements.txt`. |
 | **CORS Middleware (FastAPI)** | Configured with `CORSMiddleware` to allow cross-origin requests from the frontend dev server (`localhost:5173`) to the backend API (`localhost:8000`). |
-| **Base64 Encoding** | After OCR processing, the highlighted image (with bounding boxes drawn around detected text) is Base64-encoded and sent back to the frontend for inline display. |
+| **Base64 Encoding** | After OCR processing, the highlighted image (with **color-coded** bounding boxes drawn around detected text) is Base64-encoded and sent back to the frontend for inline display. |
 
 ---
+
+## 🔬 Advanced OCR Engine
+
+The OCR engine uses a **multi-pass, multi-preprocessing pipeline** designed to extract text from any font style, size (big, small, medium), and font family — including challenging scenarios like faint text, inverted colors, and mixed layouts.
+
+### 🖼 Preprocessing Variants
+
+Each captured image is processed through **6 different preprocessing pipelines**, each optimized for a different type of text:
+
+| Variant | Target Text Type | Technique |
+|---|---|---|
+| **Default** | General-purpose, balanced text | Grayscale → Contrast (1.8×) → Sharpness (2.0×) |
+| **High Contrast** | Faint or low-contrast text | Grayscale → Contrast (3.0×) → Sharpness (2.5×) → Median denoise |
+| **Binarized** | Mixed font sizes on complex backgrounds | Adaptive local-mean thresholding via NumPy (block-based binarization) |
+| **Large Text** | Big, bold headline fonts | Grayscale → Light contrast (1.3×) — minimal processing |
+| **Small Text** | Tiny text (fine print, disclaimers) | 2× upscale (LANCZOS) → Contrast (2.0×) → Sharpness (3.0×) |
+| **Inverted** | Light text on dark backgrounds | Auto-detects dark images → inverts → Contrast (2.0×) → Sharpness (2.0×) |
+
+### 🔄 Multi-PSM Mode Scanning
+
+Each preprocessed image is OCR'd with multiple **Tesseract Page Segmentation Modes (PSM)** to capture text that one mode might miss:
+
+| PSM Mode | Description | Best For |
+|---|---|---|
+| **PSM 3** | Fully automatic page segmentation | Standard documents, labels |
+| **PSM 4** | Single column of variable-size text | Receipts, ingredient lists |
+| **PSM 6** | Single uniform block of text | Paragraphs, notices |
+| **PSM 11** | Sparse text detection | Signs, scattered text, logos |
+
+This results in **10 strategic OCR passes** (optimized variant–PSM combinations) with **preprocessing caching** to avoid redundant computation.
+
+### 📐 Adaptive Resizing
+
+The engine automatically adjusts image scaling based on dimensions to ensure optimal OCR accuracy:
+
+| Image Size (min dimension) | Scale Factor |
+|---|---|
+| < 300px | 3× upscale |
+| 300–600px | 2× upscale |
+| 600–1200px | 2× upscale |
+| > 1200px | No scaling (already large enough) |
+
+Maximum output dimensions are capped at **4000px** to prevent memory issues.
+
+### 🧠 Smart Result Merging
+
+- **Spatial deduplication** — Uses Intersection-over-Union (IoU) overlap detection. When multiple passes detect the same word, the **highest-confidence** result is kept.
+- **Reading-order sorting** — Words are grouped into lines by Y-coordinate proximity, then sorted left-to-right within each line for natural reading flow.
+- **Garbage filtering** — Removes OCR artifacts like random single characters, excessive punctuation, and non-alphanumeric noise.
+
+### 🎨 Color-Coded Confidence Highlighting
+
+The output image displays detected text with **color-coded bounding boxes** based on OCR confidence scores:
+
+| Color | Confidence Level | Meaning |
+|---|---|---|
+| 🟢 **Green** | > 70% | High confidence — text is very likely correct |
+| 🟠 **Orange** | 40–70% | Medium confidence — text is probably correct but may have minor errors |
+| 🔴 **Red** | 20–40% | Low confidence — text may be partially incorrect or unclear |
+
+This visual feedback helps in understanding how reliably the text was extracted from different parts of the image.
+
 
 ## 🏗 Architecture Overview
 
@@ -115,7 +179,7 @@ An intelligent, local-only assistant that helps visually impaired users understa
 AI-assistant-for-visually-impaired-people/
 ├── backend/
 │   ├── config.py            # Tesseract path & Ollama model configuration
-│   ├── ocr_engine.py        # Image preprocessing + Tesseract OCR extraction
+│   ├── ocr_engine.py        # Multi-pass OCR engine (6 preprocessing variants × multiple PSM modes)
 │   ├── text_cleaner.py      # Regex-based text cleaning pipeline
 │   ├── summarizer.py        # Ollama/Llama 3 summarization logic
 │   ├── server.py            # FastAPI app with /process-image endpoint
@@ -220,4 +284,5 @@ Open your browser at `http://localhost:5173`.
 | **Ollama connection error** | Ensure `ollama serve` is running in the background and the `llama3` model is pulled via `ollama pull llama3`. |
 | **Tesseract not found** | Verify that Tesseract is installed at the path specified in `backend/config.py`. |
 | **CORS errors in browser console** | The backend is configured to allow all origins for local development. Make sure the backend is running on port `8000`. |
-| **No text detected (blank summary)** | Ensure the image has clear, readable text. Try bringing the label/text closer to the camera and ensure good lighting. |
+| **No text detected (blank summary)** | Ensure the image has clear, readable text. Try bringing the label/text closer to the camera and ensure good lighting. The multi-pass OCR engine handles most font styles automatically, but extremely blurry or low-resolution images may still be difficult to read. |
+| **OCR processing is slow** | The multi-pass OCR engine runs 10 strategic passes for maximum accuracy. On lower-end hardware, this may take a few extra seconds. This is expected behavior for thorough text extraction. |
