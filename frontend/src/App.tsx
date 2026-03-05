@@ -26,7 +26,7 @@ function App() {
     const startCameraRef = useRef<() => void>(() => { });
     const captureImageRef = useRef<() => void>(() => { });
 
-    const INACTIVITY_TIMEOUT = 20_000; 
+    const INACTIVITY_TIMEOUT = 20_000;
     const lastInteractionRef = useRef<number>(Date.now());
     const inactivityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const resetInactivityTimer = useCallback(() => {
@@ -117,7 +117,7 @@ function App() {
 
     const handleVoiceCommand = useCallback((command: SpeechCommand) => {
         console.log("Voice Command received:", command, "| Current state:", stateRef.current);
-        resetInactivityTimer(); 
+        resetInactivityTimer();
 
         switch (command) {
             case "OPEN_CAMERA":
@@ -170,7 +170,7 @@ function App() {
                 if (guidance) {
                     console.log("⏱️ Inactivity — auto-repeating guidance for:", stateRef.current);
                     speechRef.current?.speak(guidance);
-   
+
                     lastInteractionRef.current = Date.now();
                 }
             }
